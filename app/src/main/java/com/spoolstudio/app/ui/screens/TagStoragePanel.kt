@@ -3,14 +3,18 @@ package com.spoolstudio.app.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.spoolstudio.app.data.local.TagStorageSettings
 import com.spoolstudio.app.data.remote.spoolman.SpoolmanService
 import com.spoolstudio.app.ui.theme.SpoolStudioColors
+import com.spoolstudio.app.domain.models.TagStorageMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -19,7 +23,7 @@ fun TagStoragePanel(url: String, onChanged: () -> Unit) {
     val server = normalizeSettingsUrl(url)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var nativeOnly by remember(server) { mutableStateOf(TagStorageSettings.nativeOnly(server)) }
+    var mode by remember(server) { mutableStateOf(TagStorageSettings.mode(server)) }
     var busy by remember(server) { mutableStateOf(false) }
     var preview by remember(server) { mutableStateOf<String?>(null) }
     var report by remember(server) { mutableStateOf<String?>(null) }
@@ -44,31 +48,39 @@ fun TagStoragePanel(url: String, onChanged: () -> Unit) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("NFC / RFID tag storage", style = MaterialTheme.typography.titleSmall, color = SpoolStudioColors.OnGraphite)
-        Text("Native tags take priority. Compatibility mode also writes card_uids for older Paxx12 firmware. Changes apply immediately to this server.",
+        Text("Choose the storage used by your printer. Both is the compatibility default; when reading both, native tags take priority. Changes apply immediately to this server.",
             style = MaterialTheme.typography.bodySmall, color = SpoolStudioColors.OnGraphiteMuted)
-        Text("Paxx12 firmware 2.0.0-paxx12-24 still requires compatibility mode. Leave native-only off and retain legacy links when migrating.",
+        Text("Match the printer's card_uids or native setting. Older firmware needs card_uids or Both. Changing this app setting does not move or delete links; use firmware-config to change the printer's storage.",
             style = MaterialTheme.typography.bodySmall, color = SpoolStudioColors.OnGraphiteMuted)
-        Row {
-            Checkbox(checked = nativeOnly, colors = checkboxColors, enabled = !busy && server.isNotBlank(), onCheckedChange = { value ->
-                runOperation {
-                    if (value) check(SpoolmanService(server).hasNativeTags()) { "Native tags require Spoolman 0.27.0 or newer." }
-                    TagStorageSettings.initialize(context)
-                    TagStorageSettings.setNativeOnly(server, value)
-                    nativeOnly = value
-                    onChanged()
+        Text("Changing storage or migrating clears the current form selection. Select your spool again afterwards.",
+            style = MaterialTheme.typography.bodySmall, color = SpoolStudioColors.OnGraphiteMuted)
+        TagStorageMode.entries.forEach { option ->
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(
+                selected = mode == option, enabled = !busy && server.isNotBlank(), role = Role.RadioButton,
+                onClick = {
+                    runOperation {
+                        if (option == TagStorageMode.NATIVE_ONLY) check(SpoolmanService(server).hasNativeTags()) { "Native tags require Spoolman 0.27.0 or newer." }
+                        TagStorageSettings.initialize(context)
+                        TagStorageSettings.setMode(server, option)
+                        mode = option
+                        onChanged()
+                    }
                 }
-            })
-            Text("Native tags only (requires compatible printer firmware)", color = SpoolStudioColors.OnGraphite, modifier = Modifier.padding(top = 12.dp))
+            ).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = mode == option, onClick = null,
+                    colors = RadioButtonDefaults.colors(selectedColor = SpoolStudioColors.AccentCyan, unselectedColor = SpoolStudioColors.OnGraphiteMuted))
+                Text(option.label, color = SpoolStudioColors.OnGraphite, modifier = Modifier.padding(start = 12.dp))
+            }
         }
         OutlinedButton(colors = ButtonDefaults.outlinedButtonColors(
             contentColor = SpoolStudioColors.AccentCyan,
             disabledContentColor = SpoolStudioColors.OnGraphiteMuted.copy(alpha = 0.55f)
-        ), enabled = !busy && server.isNotBlank(), onClick = {
+        ), enabled = !busy && server.isNotBlank() && mode.usesNative, onClick = {
             runOperation {
                 clearLegacy = false
                 preview = SpoolmanService(server).previewTagMigration()
             }
-        }) { Text(if (busy) "Working…" else "Review legacy tag migration") }
+        }) { Text(if (busy) "Working…" else "Copy legacy links to native tags") }
     }
     preview?.let { description ->
         AlertDialog(onDismissRequest = { if (!busy) preview = null }, title = { Text("Migrate tag links") },

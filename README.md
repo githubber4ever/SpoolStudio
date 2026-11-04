@@ -2,15 +2,15 @@
 
 ![Platform](https://img.shields.io/badge/Platform-Android-green)
 ![Kotlin](https://img.shields.io/badge/Kotlin-100%25-blue)
-![Version](https://img.shields.io/badge/Version-3.1.2-cyan)
+![Version](https://img.shields.io/badge/Version-3.1.3-cyan)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/georgho)
 
 Spool Studio is an Android app for managing 3D printer filament spools with Spoolman, NFC/RFID tags, and Snapmaker U1 printer integration.
 
-Version 3.1.2 fixes low-contrast text in the NFC/RFID settings and aligns the related tag controls and dialogs with the dark UI. The filament-name preservation and separate printer-clear/tag-unlink actions from 3.1.1 remain available, along with native Spoolman tags and Paxx12 SpoolLink compatibility.
+Version 3.1.3 adds per-server tag storage selection (legacy only, native only, or both) and keeps readable RFID colors available when Spoolman is offline. Existing filament-name preservation, dark UI contrast fixes and separate printer-clear/tag-unlink actions remain available.
 
-The previous 3.0 series was tested with **Paxx12 Extended Firmware v1.6.0**. The app has automated API and regression tests; physical NFC and printer verification is still required.
+The previous 3.0 series was tested with **Paxx12 Extended Firmware v1.6.0**. The 3.1.3 storage/offline workflows were tested on a U1 with Spoolman 0.27.0, using `2.0.0-paxx12-24` for the initial legacy checks and `2.1.0-paxx12-pr867` for native tags and return migration.
 
 This project started from the open-source project **SpoolPainter** by ni4223 and has since been heavily extended.
 
@@ -48,20 +48,31 @@ If you still use older Paxx12 firmware or the old Spool Studio tag workflow, use
 
 ### Native tags in v3.1
 
+Version 3.1.3 includes the tested storage/offline workflows. Five live test groups passed.
+
+[Ausführliche deutsche App-Anleitung für v3.1.3](docs/APP-GUIDE-DE.md) — setup, storage modes, migration, tag linking, offline reads and toolhead actions.
+
 - Spoolman 0.27.0 or newer: native tags are read first. By default, new links are also written to `card_uids` for existing Paxx12 firmware.
 - Older Spoolman servers (or compatible servers without `/api/v1/info`): the existing `card_uids` workflow remains available.
-- Settings → Spoolman → **Native tags only** disables the legacy store for the selected server. Enable this only when the printer firmware supports native tags. This setting takes effect immediately and is stored per server URL.
+- Settings → Spoolman → **NFC / RFID tag storage** selects **Both (compatibility)**, **Only card_uids**, or **Only native tags**, per server. Both remains the default, and the previous native-only preference is preserved when upgrading. In a single-store mode, reads, links and unlinks ignore the other store. Native-only requires Spoolman 0.27.0 or newer; legacy-only does not call the native tag API.
+- Match the app mode to the printer's selected store. Choosing a mode does not migrate or delete data. For the firmware's storage switch and return migration, use firmware-config (PR #867); copying legacy entries to native tags in the app remains an explicit, confirmed operation available in Both/native-only modes.
 - **Review legacy tag migration** previews the number of entries, including archived spools. Migration copies links by default. Clearing successfully migrated legacy entries is an explicit option, and can break older firmware's automatic lookup. Duplicate, invalid or conflicting entries remain for review.
 - A native filament tag identifies a product, not a particular spool. Scanning it displays a message instead of selecting a spool automatically.
-- **Manage tag links** lists native and legacy UIDs on the selected spool. Unlink requires confirmation and removes the compatibility mirror as well. **Link scanned UID** can explicitly move a native spool tag from its previous owner; ordinary saves do not silently move native tags.
+- **Manage tag links** lists UIDs from the selected store(s). Unlink requires confirmation and affects only those store(s). **Link scanned UID** can explicitly move a native spool tag from its previous owner; ordinary saves do not silently move native tags.
 - The tag content format is unchanged. OpenTag3D encoding/decoding and external scanner subscriptions are not part of this release.
 
 ### Filament names and clearing assignments
 
-- Existing filament names retain their spelling and full length when editing a spool or changing its color. The **Filament Name** field changes the product name explicitly; **Use suggested color as filament name** is an optional replacement.
-- **Clear printer assignment** clears the toolhead mapping and keeps tag links. A subsequent RFID scan may assign the spool again. This intentionally avoids firmware `2.0.0-paxx12-24`'s `SET_SPOOL_ID=0`, which also removes legacy UID links.
-- **Manage tag links → Unlink** removes the selected tag's native and compatibility links after confirmation. It does not clear an already loaded printer assignment.
+- Existing filament names retain their spelling and full length when editing a spool or changing its color. The **Filament Name** field changes the product name explicitly. A bordered **Use color name: …** button appears only when the name differs from the color suggestion; matching names do not produce an extra action.
+- **Toolhead Status → pencil icon → Clear printer assignment** clears the toolhead mapping and keeps tag links. A subsequent RFID scan may assign the spool again. This intentionally avoids firmware `2.0.0-paxx12-24`'s `SET_SPOOL_ID=0`, which also removes legacy UID links.
+- **Manage tag links → Unlink** removes the selected tag's links from the selected store(s) after confirmation. It does not clear an already loaded printer assignment.
 - Firmware `2.0.0-paxx12-24` still uses `card_uids`: retain compatibility mode and keep the legacy field when copying links to native tags.
+
+### RFID reading without a server
+
+Readable OpenSpool tag contents, including color, are displayed immediately without requiring a successful Spoolman request. Already decoded Bambu metadata can also be displayed locally. A connection failure keeps these values in the form; an embedded spool ID or cached UID match is not treated as a confirmed server assignment. A successful server lookup still takes priority.
+
+An empty or encrypted tag that supplies only a hardware UID has no readable color to display offline. Existing key/decoder requirements for vendor tags are unchanged.
 
 Spool Studio v3 is built for the new Paxx12 SpoolLink workflow.
 
@@ -111,7 +122,7 @@ Recommended migration workflow:
 ### 2. Connect Spoolman
 
 - Open **Settings**.
-- Enter your Spoolman URL, for example `http://10.201.0.68:8000`.
+- Enter your Spoolman URL, for example `http://spoolman.local:8000`.
 - Tap **Test Spoolman Connection**.
 - Use **Show Spoolman Info** to inspect the connected Spoolman instance.
 
@@ -193,7 +204,7 @@ Bambu Lab RFID support requires a user-provided master key. The key is not inclu
 ## Requirements
 
 - Android device with NFC
-- Android API 21 or newer
+- Android 10 / API 29 or newer
 - Spoolman server for the main workflow
 - Paxx12 Extended Firmware 1.5.x with SpoolLink support for the v3 printer workflow
 - Moonraker access to the Snapmaker U1

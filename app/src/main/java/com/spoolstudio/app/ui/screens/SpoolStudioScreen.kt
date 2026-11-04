@@ -283,10 +283,6 @@ fun SpoolStudioScreen(
                         onRefreshSpoolmanCatalogIfStale = onRefreshSpoolmanCatalogIfStale
                     )
 
-                    if (spoolMode == SpoolMode.UPDATE && selectedSpool?.id != null) {
-                        SpoolTagsPanel(spoolmanUrl, selectedSpool) { onRefreshSelectedSpool(selectedSpool.id) }
-                    }
-
                     validationMessage()?.let { message ->
                         ValidationMessageCard(message = message)
                     }
@@ -335,6 +331,11 @@ fun SpoolStudioScreen(
                         isLinkScannedUidEnabled = !lastScannedCardUid.isNullOrBlank() && !isLinkingScannedUid,
                         onLinkScannedUid = {
                             showLinkScannedUidDialog = true
+                        },
+                        tagLinksContent = {
+                            if (spoolMode == SpoolMode.UPDATE && selectedSpool?.id != null) {
+                                SpoolTagsPanel(spoolmanUrl, selectedSpool) { onRefreshSelectedSpool(selectedSpool.id) }
+                            }
                         }
                     )
                 }

@@ -131,7 +131,8 @@ fun SettingsScreen(
     showLotNumber: Boolean,
     onShowLotNumberChanged: (Boolean) -> Unit,
     onShowEmptySpoolWeightChanged: (Boolean) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onTagStorageChanged: (String) -> Unit = onTestSpoolmanConnection
 ) {
     val savedProfiles = remember(connectionProfiles, spoolmanUrl, moonrakerUrl) {
         normalizeConnectionProfiles(connectionProfiles).ifEmpty {
@@ -312,7 +313,7 @@ fun SettingsScreen(
             }
 
             SettingsPanel(title = "Spoolman") {
-                TagStoragePanel(tempUrl, onChanged = { onTestSpoolmanConnection(normalizeSettingsUrl(tempUrl)) })
+                TagStoragePanel(tempUrl, onChanged = { onTagStorageChanged(normalizeSettingsUrl(tempUrl)) })
                 SettingsTextField(
                     value = tempUrl,
                     onValueChange = {

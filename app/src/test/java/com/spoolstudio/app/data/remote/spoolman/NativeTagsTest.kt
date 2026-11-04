@@ -1,5 +1,6 @@
 package com.spoolstudio.app.data.remote.spoolman
 
+import com.spoolstudio.app.domain.models.TagStorageMode
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -60,13 +61,13 @@ class NativeTagsTest {
         assertEquals(2, server.requestCount)
     }
     @Test fun nativeOnlyDoesNotReadLegacyFallback() = runBlocking {
-        service.nativeOnly = true
+        service.tagStorageMode = TagStorageMode.NATIVE_ONLY
         info(); reply("[]"); reply("[]")
         assertNull(service.findSpoolByCardUid("AABB"))
         assertEquals(3, server.requestCount)
     }
     @Test fun nativeOnlyDoesNotWriteLegacyFields() = runBlocking {
-        service.nativeOnly = true
+        service.tagStorageMode = TagStorageMode.NATIVE_ONLY
         info(); reply()
         service.assignCardUidToSpool(2, "AABB")
         server.takeRequest()
@@ -74,14 +75,14 @@ class NativeTagsTest {
         assertEquals(2, server.requestCount)
     }
     @Test fun conflictDoesNotStealTagWithoutExplicitMove() = runBlocking {
-        service.nativeOnly = true
+        service.tagStorageMode = TagStorageMode.NATIVE_ONLY
         info(); reply("""{"spool_id":1}""", 409)
         try { service.assignCardUidToSpool(2, "AABB"); fail("Expected conflict") }
         catch (e: IllegalStateException) { assertTrue(e.message!!.contains("spool #1")) }
         assertEquals(2, server.requestCount)
     }
     @Test fun explicitMoveUnlinksOldOwnerAndLinksNewOwner() = runBlocking {
-        service.nativeOnly = true
+        service.tagStorageMode = TagStorageMode.NATIVE_ONLY
         info(); reply("""{"spool_id":1}""", 409); reply(); reply()
         service.assignCardUidToSpool(2, "AABB", moveExisting = true)
         server.takeRequest(); server.takeRequest()
@@ -89,7 +90,7 @@ class NativeTagsTest {
         assertEquals("/api/v1/spool/2/tag", server.takeRequest().path)
     }
     @Test fun nativeOnlyOnOlderServerFailsBeforeWriting() = runBlocking {
-        service.nativeOnly = true; info("0.26.1")
+        service.tagStorageMode = TagStorageMode.NATIVE_ONLY; info("0.26.1")
         try { service.assignCardUidToSpool(2, "AABB"); fail("Expected unsupported server") }
         catch (e: IllegalStateException) { assertTrue(e.message!!.contains("0.27.0")) }
         assertEquals(1, server.requestCount)
@@ -139,7 +140,7 @@ class NativeTagsTest {
     }
 
     @Test fun failedMoveAttemptsToRestorePreviousOwner() = runBlocking {
-        service.nativeOnly = true
+        service.tagStorageMode = TagStorageMode.NATIVE_ONLY
         info(); reply("""{"spool_id":1}""", 409); reply(); reply("{}", 503); reply()
         try { service.assignCardUidToSpool(2, "AABB", moveExisting = true); fail("Expected failure") }
         catch (e: IllegalStateException) { assertTrue(e.message!!.contains("previous link restored")) }
@@ -191,5 +192,54 @@ class NativeTagsTest {
         assertEquals("DELETE", delete.method); assertEquals("/api/v1/spool/1/tag/AABB", delete.path)
         server.takeRequest()
         assertTrue(server.takeRequest().body.readUtf8().contains("card_uids"))
+    }
+
+    @Test fun legacyOnlyLookupIgnoresNativeOwnerAndDoesNotProbeNativeApi() = runBlocking {
+        service.tagStorageMode = TagStorageMode.LEGACY_ONLY
+        val nativeOwner = spool(2, "").replace("\"tags\":[]", "\"tags\":[{\"uid\":\"AABB\"}]")
+        reply("[${spool(1)},$nativeOwner]")
+        val found = service.findSpoolByCardUid("AABB")!!
+        assertEquals(1, found.id)
+        assertTrue(found.nativeTagUids.isEmpty())
+        assertEquals(1, server.requestCount)
+        assertFalse(server.takeRequest().path!!.contains("tag="))
+    }
+
+    @Test fun legacyOnlyAssignmentNeverWritesOrQueriesNativeTags() = runBlocking {
+        service.tagStorageMode = TagStorageMode.LEGACY_ONLY
+        reply("""[{"key":"card_uids","name":"Card UIDs","field_type":"text"}]""")
+        reply("""[{"key":"variant","name":"Variant","field_type":"text"}]""")
+        reply(spool(2, "")); reply("[${spool(2, "")}]"); reply(spool(2))
+        service.assignCardUidToSpool(2, "AABB")
+        assertEquals(5, server.requestCount)
+        val requests = (1..5).map { server.takeRequest() }
+        assertTrue(requests.none { it.path!!.endsWith("/info") || it.path!!.contains("/tag") })
+        assertEquals("PATCH", requests.last().method)
+        assertTrue(requests.last().body.readUtf8().contains("AABB"))
+    }
+
+    @Test fun legacyOnlyUnlinkLeavesNativeTagsUntouched() = runBlocking {
+        service.tagStorageMode = TagStorageMode.LEGACY_ONLY
+        reply(spool(1, native = true)); reply(spool(1, ""))
+        service.unlinkCardUid(1, "AABB")
+        assertEquals(2, server.requestCount)
+        assertEquals("GET", server.takeRequest().method)
+        assertEquals("PATCH", server.takeRequest().method)
+    }
+
+    @Test fun nativeOnlyUnlinkLeavesLegacyMirrorUntouched() = runBlocking {
+        service.tagStorageMode = TagStorageMode.NATIVE_ONLY
+        info(); reply()
+        service.unlinkCardUid(1, "AABB")
+        assertEquals(2, server.requestCount)
+        server.takeRequest()
+        assertEquals("DELETE", server.takeRequest().method)
+    }
+
+    @Test fun legacyOnlyCannotAccidentallyRunNativeMigration() = runBlocking {
+        service.tagStorageMode = TagStorageMode.LEGACY_ONLY
+        try { service.migrateLegacyTags(true); fail("Expected explicit mode selection") }
+        catch (e: IllegalStateException) { assertTrue(e.message!!.contains("Select Both")) }
+        assertEquals(0, server.requestCount)
     }
 }

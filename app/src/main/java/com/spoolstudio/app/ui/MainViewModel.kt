@@ -15,6 +15,7 @@ import com.spoolstudio.app.domain.models.OpenSpoolData
 import com.spoolstudio.app.domain.models.normalizeCardUid
 import com.spoolstudio.app.domain.models.spoolLinkSpoolmanFields
 import com.spoolstudio.app.hardware.nfc.NfcTagReadResult
+import com.spoolstudio.app.ui.screens.isBambuRfidDump
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -213,16 +214,28 @@ class MainViewModel : ViewModel() {
         val generation = ++nfcLookupGeneration
         val uid = normalizeCardUid(result.cardUid)
         lastScannedCardUid = uid
+        val localData = localNfcTagData(result)
+        val willLookup = uid.isNotBlank() && spoolmanUrl.isNotBlank()
+        selectedSpool = null
+        currentSpoolId = null
+        pendingTagConversion = null
+        readData = localData
+        spoolMode = SpoolMode.CREATE
+        dataVersion++
+        // Local display must not invoke vendor-import heuristics that select a cached UID owner.
         rawReadText = null
-        if (uid.isBlank() || spoolmanUrl.isBlank()) {
-            handleLegacyNfcTagDetected(result)
+        rawReadVersion++
+        if (!willLookup) {
+            showSnackbarMessage(if (localData != null) "RFID data read locally; no server assignment confirmed."
+                else "RFID UID read. No readable color data is stored on this tag.", autoDismiss = false)
             return
         }
         val server = spoolmanUrl
         viewModelScope.launch {
             try {
-                val spool = SpoolmanService(server).findSpoolByCardUid(uid)
+                val resolution = NfcReadResolver().resolve(server, result, localData)
                 if (generation != nfcLookupGeneration || server != spoolmanUrl) return@launch
+                val spool = resolution.matchedSpool
                 if (spool != null) {
                     selectedSpool = spool
                     readData = OpenSpoolData.toOpenSpoolData(spool).copy(cardUid = uid)
@@ -232,23 +245,26 @@ class MainViewModel : ViewModel() {
                     // A confirmed UID owner wins over any metadata-import heuristic.
                     rawReadText = null
                     showSnackbarMessage("Tag resolved to Spoolman ID #${spool.id}")
+                } else if (resolution.lookupError != null) {
+                    showSnackbarMessage("Spoolman lookup: ${resolution.lookupError.message}. " +
+                        if (localData != null) "Showing tag contents only; no server assignment confirmed."
+                        else "No readable color data on the tag; server assignment could not be confirmed.", autoDismiss = false)
                 } else {
-                    selectedSpool = null
-                    currentSpoolId = null
-                    readData = null
-                    spoolMode = SpoolMode.CREATE
-                    dataVersion++
-                    handleLegacyNfcTagDetected(result, allowLoadedUidLookup = false)
+                    if (result.data?.let(::isBambuRfidDump) == true) {
+                        showSnackbarMessage("RFID contents read locally; UID is not linked in the selected Spoolman storage.", autoDismiss = false)
+                    } else {
+                        handleLegacyNfcTagDetected(result)
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) {
                 if (generation == nfcLookupGeneration && server == spoolmanUrl) {
                     selectedSpool = null
                     currentSpoolId = null
-                    readData = null
+                    readData = localData
                     spoolMode = SpoolMode.CREATE
                     dataVersion++
-                    showSnackbarMessage("Tag lookup: ${e.message}", autoDismiss = false)
+                    showSnackbarMessage("Tag lookup failed: ${e.message}. Showing locally read tag contents only.", autoDismiss = false)
                 }
             }
         }
@@ -256,7 +272,7 @@ class MainViewModel : ViewModel() {
 
     private var nfcLookupGeneration = 0
 
-    private fun handleLegacyNfcTagDetected(result: NfcTagReadResult, allowLoadedUidLookup: Boolean = true) {
+    private fun handleLegacyNfcTagDetected(result: NfcTagReadResult) {
         val data = result.data
         val physicalUid = normalizeCardUid(result.cardUid)
         Log.d("MainViewModel", "handleNfcTagDetected called with UID: $physicalUid data: $data")
@@ -282,18 +298,6 @@ class MainViewModel : ViewModel() {
         rawReadVersion = stateUpdate.rawReadVersion
 
         if (tagData != null) {
-            val matchedSpool = if (allowLoadedUidLookup) findLoadedSpoolByCardUid(tagData.readData) else null
-            if (matchedSpool != null) {
-                selectedSpool = matchedSpool
-                readData = OpenSpoolData.toOpenSpoolData(matchedSpool).copy(
-                    cardUid = tagData.readData.cardUid
-                )
-                currentSpoolId = matchedSpool.id?.toString()
-                spoolMode = SpoolMode.UPDATE
-                dataVersion++
-                return
-            }
-
             val oldSpoolIdMatch = findLoadedSpoolBySpoolId(tagData.readData)
             val tagUid = normalizeCardUid(tagData.readData.cardUid)
             if (oldSpoolIdMatch?.id != null && tagUid.isNotBlank()) {
@@ -310,12 +314,12 @@ class MainViewModel : ViewModel() {
                 return
             }
 
-            readData = stateUpdate.readData
-            currentSpoolId = stateUpdate.currentSpoolId
+            readData = stateUpdate.readData?.copy(spoolId = null)
+            currentSpoolId = null
             if (stateUpdate.clearSelectedSpool) {
                 selectedSpool = null
             }
-            stateUpdate.spoolMode?.let { spoolMode = it }
+            spoolMode = SpoolMode.CREATE
             if (stateUpdate.incrementDataVersion) {
                 dataVersion++
             }
@@ -336,15 +340,6 @@ class MainViewModel : ViewModel() {
         }
 
         return null
-    }
-
-    private fun findLoadedSpoolByCardUid(readData: OpenSpoolData): FilamentSpool? {
-        val uid = normalizeCardUid(readData.cardUid)
-        if (uid.isBlank()) return null
-
-        return spools.firstOrNull { spool ->
-            spool.cardUids.any { it.equals(uid, ignoreCase = true) }
-        }
     }
 
     fun confirmTagConversion(context: Context) {
@@ -900,6 +895,17 @@ class MainViewModel : ViewModel() {
 
     fun testMoonrakerConnection() {
         testMoonrakerConnection(moonrakerUrl)
+    }
+
+    fun handleTagStorageChanged(inputUrl: String) {
+        if (normalizeConnectionUrl(inputUrl) == normalizeConnectionUrl(spoolmanUrl)) {
+            // Do not let a UID captured under another store leak into the next save.
+            createEmptySpool()
+            lastScannedCardUid = null
+            pendingTagWriteSpoolId = null
+            pendingTagConversion = null
+        }
+        testSpoolmanConnection(inputUrl)
     }
 
     fun testSpoolmanConnection(inputUrl: String) {

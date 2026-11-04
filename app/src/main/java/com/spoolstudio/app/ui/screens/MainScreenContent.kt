@@ -82,6 +82,7 @@ fun MainScreenContent(
             onTestSpoolmanConnection = { url ->
                 viewModel.testSpoolmanConnection(url)
             },
+            onTagStorageChanged = { url -> viewModel.handleTagStorageChanged(url) },
             onCreateMaterialModifierField = { url ->
                 viewModel.createMaterialModifierField(context, url)
             },

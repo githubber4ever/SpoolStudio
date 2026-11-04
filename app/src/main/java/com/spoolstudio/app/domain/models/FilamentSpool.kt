@@ -129,6 +129,7 @@ data class FilamentSpool(
                 materialModifier = spoolStudioFields.materialModifier,
                 brand = spool.brand,
                 location = null,
+                remainingWeight = spool.formRemainingWeight,
                 colorHex = normalizeHexColor(spool.colorHex),
                 minTemp = spool.minTemp.toIntOrNull() ?: material?.defaultMinTemp,
                 maxTemp = spool.maxTemp.toIntOrNull() ?: material?.defaultMaxTemp,

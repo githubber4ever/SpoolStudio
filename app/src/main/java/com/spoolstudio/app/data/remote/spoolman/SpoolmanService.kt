@@ -2,6 +2,8 @@ package com.spoolstudio.app.data.remote.spoolman
 
 import android.util.Log
 import com.spoolstudio.app.data.local.TagStorageSettings
+import com.spoolstudio.app.domain.models.TagStorageMode
+import com.spoolstudio.app.domain.models.spoolTagViews
 import com.google.gson.JsonElement
 import com.spoolstudio.app.domain.models.CreateFilamentRequest
 import com.spoolstudio.app.domain.models.CreateSpoolRequest
@@ -170,7 +172,7 @@ data class SpoolmanLegacyFilamentConversion(
 }
 
 class SpoolmanService(private val baseUrl: String) {
-    internal var nativeOnly = TagStorageSettings.nativeOnly(baseUrl)
+    internal var tagStorageMode = TagStorageSettings.mode(baseUrl)
     private var nativeTagSupport: Boolean? = null
 
     suspend fun hasNativeTags(): Boolean {
@@ -182,8 +184,9 @@ class SpoolmanService(private val baseUrl: String) {
     }
 
     suspend fun requireTagMode(): Boolean {
+        if (!tagStorageMode.usesNative) return false
         val supported = hasNativeTags()
-        check(!nativeOnly || supported) { "Native tags only requires Spoolman 0.27.0 or newer. Change Tag storage in Settings for this server." }
+        check(tagStorageMode != TagStorageMode.NATIVE_ONLY || supported) { "Native tags only requires Spoolman 0.27.0 or newer. Change Tag storage in Settings for this server." }
         return supported
     }
     private var cachedCatalog: SpoolmanCatalog? = null
@@ -246,8 +249,8 @@ class SpoolmanService(private val baseUrl: String) {
         val spoolFetchResult = fetchAllSpools(sortBy)
         val vendors = fetchAllVendors()
         val filaments = fetchAllFilaments()
-        val filamentTags = filaments.flatMap { it.tags.orEmpty().map { tag -> tag.uid } }.toSet()
-        val spools = spoolFetchResult.spools.map { spool -> spool.copy(cardUids = spool.cardUids.filterNot { it in filamentTags }) }
+        val effectiveMode = if (nativeTagSupport == true) tagStorageMode else TagStorageMode.LEGACY_ONLY
+        val spools = spoolTagViews(spoolFetchResult.rawSpools, effectiveMode, filaments)
         val filamentExtraFields = fetchExtraFields(FILAMENT_ENTITY_TYPE)
         val cardUidFieldKeys = spoolFetchResult.rawSpools
             .flatMap { it.extra.cardUidKeys() }
@@ -306,7 +309,7 @@ class SpoolmanService(private val baseUrl: String) {
     }
 
     suspend fun ensurePaxx12SpoolLinkFields() {
-        if (!nativeOnly) ensureExtraTextField(
+        if (tagStorageMode.usesLegacy) ensureExtraTextField(
             entityType = SPOOL_ENTITY_TYPE,
             key = CARD_UIDS_FIELD_KEY,
             name = "Card UIDs",
@@ -497,15 +500,8 @@ class SpoolmanService(private val baseUrl: String) {
             if (batch.size < PAGE_SIZE) break
             offset += PAGE_SIZE
         }
-        requireTagMode()
-        val nativeOwners = rawSpools.flatMap { spool ->
-            spool.tags.orEmpty().map { it.uid to spool.id } + spool.filament.tags.orEmpty().map { it.uid to null }
-        }.toMap()
-        val resolved = rawSpools.map { spool ->
-            val legacy = if (nativeOnly) emptyList() else parseCardUids(spool.extra.stringValue("card_uids") ?: spool.extra.stringValue("card_uid"))
-            FilamentSpool.fromSpoolman(spool).copy(cardUids = (spool.tags.orEmpty().map { it.uid } +
-                legacy.filter { it !in nativeOwners || nativeOwners[it] == spool.id }).distinct())
-        }
+        val effectiveMode = if (requireTagMode()) tagStorageMode else TagStorageMode.LEGACY_ONLY
+        val resolved = spoolTagViews(rawSpools, effectiveMode)
         return SpoolFetchResult(rawSpools = rawSpools, spools = resolved)
     }
 
@@ -569,9 +565,7 @@ class SpoolmanService(private val baseUrl: String) {
         return try {
             val response = api.getSpool(id)
             if (response.isSuccessful) response.body()?.let {
-                FilamentSpool.fromSpoolman(it).let { spool ->
-                    if (nativeOnly) spool.copy(cardUids = spool.nativeTagUids) else spool
-                }
+                spoolTagViews(listOf(it), tagStorageMode).single()
             } else null
         } catch (_: Exception) {
             null
@@ -835,22 +829,21 @@ class SpoolmanService(private val baseUrl: String) {
                 "Server returned an invalid native tag result; no spool selected."
             }
             spools.firstOrNull()?.let {
-                val spool = FilamentSpool.fromSpoolman(it)
-                return if (nativeOnly) spool.copy(cardUids = spool.nativeTagUids) else spool
+                return spoolTagViews(listOf(it), tagStorageMode).single()
             }
             val filaments = api.getFilaments(PAGE_SIZE, tag = normalizedUid).checked("Find native filament tag").orEmpty()
             check(filaments.size <= 1 && filaments.all { it.tags.orEmpty().any { tag -> tag.uid == normalizedUid } }) {
                 "Server returned an invalid native filament tag result."
             }
             filaments.firstOrNull()?.let { throw FilamentTagException(it.id, it.name) }
-            if (nativeOnly) return null
+            if (!tagStorageMode.usesLegacy) return null
         }
         val matches = fetchAllRawSpools(includeArchived = true).filter { spool ->
             parseCardUids(spool.extra.stringValue("card_uids") ?: spool.extra.stringValue("card_uid"))
                 .any { it == normalizedUid }
         }
         check(matches.size <= 1) { "UID is assigned to multiple legacy spools. Resolve the duplicate before selecting a spool." }
-        return matches.firstOrNull()?.let { FilamentSpool.fromSpoolman(it) }
+        return matches.firstOrNull()?.let { spoolTagViews(listOf(it), TagStorageMode.LEGACY_ONLY).single() }
     }
 
     suspend fun assignCardUidToSpool(spoolId: Int, cardUid: String, moveExisting: Boolean = false) {
@@ -875,7 +868,7 @@ class SpoolmanService(private val baseUrl: String) {
             }
             response.checked("Link native tag")?.close()
             cachedCatalog = null
-            if (nativeOnly) return
+            if (!tagStorageMode.usesLegacy) return
         }
         ensurePaxx12SpoolLinkFields()
 
@@ -932,6 +925,7 @@ class SpoolmanService(private val baseUrl: String) {
 
     /** Preview is read-only. Execution re-reads each spool before clearing its old field. */
     suspend fun previewTagMigration(): String {
+        check(tagStorageMode.usesNative) { "Select Both or Only native tags before copying legacy links." }
         check(hasNativeTags()) { "Migration requires Spoolman 0.27.0 or newer." }
         val spools = fetchAllRawSpools(includeArchived = true)
         val affected = spools.filter { legacyUids(it).isNotEmpty() }
@@ -946,6 +940,7 @@ class SpoolmanService(private val baseUrl: String) {
             ?.split(Regex("[,;\\n\\t ]+"))?.filter { it.isNotBlank() }.orEmpty()
 
     suspend fun migrateLegacyTags(clearLegacy: Boolean): TagMigrationReport {
+        check(tagStorageMode.usesNative) { "Select Both or Only native tags before copying legacy links." }
         check(hasNativeTags()) { "Migration requires Spoolman 0.27.0 or newer." }
         val spools = fetchAllRawSpools(includeArchived = true)
         val counts = spools.flatMap { s -> legacyUids(s).map { runCatching { canonicalTagUid(it) }.getOrDefault(it) to s.id } }
@@ -1001,7 +996,9 @@ class SpoolmanService(private val baseUrl: String) {
             val response = api.unlinkTag(spoolId, uid)
             if (response.code() != 404) response.checked("Unlink tag")?.close()
         }
-        // Explicit unlink removes the compatibility mirror too so it cannot reappear.
+        cachedCatalog = null
+        if (!tagStorageMode.usesLegacy) return
+        // Single-store modes leave the unselected store untouched.
         val current = api.getSpool(spoolId).checked("Load spool") ?: error("Spool not found")
         val remaining = legacyUids(current).filterNot { normalizeCardUid(it) == normalizeCardUid(uid) }
         if (remaining.size != legacyUids(current).size) {

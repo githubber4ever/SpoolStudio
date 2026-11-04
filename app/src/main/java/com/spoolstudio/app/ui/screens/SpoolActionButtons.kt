@@ -43,7 +43,8 @@ fun SpoolActionSection(
     isArchiveSpoolEnabled: Boolean,
     onArchiveSelectedSpool: () -> Unit,
     isLinkScannedUidEnabled: Boolean = false,
-    onLinkScannedUid: () -> Unit = {}
+    onLinkScannedUid: () -> Unit = {},
+    tagLinksContent: @Composable () -> Unit = {}
 ) {
     val focusManager = LocalFocusManager.current
     fun clearThen(action: () -> Unit): () -> Unit = {
@@ -72,6 +73,8 @@ fun SpoolActionSection(
                     enabled = true
                 )
             }
+
+            tagLinksContent()
 
             if (isCreateMode) {
                 SaveToSpoolmanButton(
@@ -177,7 +180,7 @@ private fun PrimaryActionButton(
 }
 
 @Composable
-private fun SecondaryActionButton(
+internal fun SecondaryActionButton(
     text: String,
     enabled: Boolean = true,
     onClick: () -> Unit,

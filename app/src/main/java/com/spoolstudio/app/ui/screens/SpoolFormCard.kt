@@ -40,7 +40,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -351,10 +352,18 @@ private fun SpoolDataCard(
                 }
             )
 
-            TextButton(
-                enabled = !form.colorHex.isNullOrBlank(),
-                onClick = { form.editFilamentName(suggestColorName(form.colorHex)) }
-            ) { Text("Use suggested color as filament name") }
+            if (shouldOfferColorNameSuggestion(form.colorName, form.colorHex)) {
+                OutlinedButton(
+                    onClick = { form.editFilamentName(suggestColorName(form.colorHex)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    shape = SpoolStudioShape.Button,
+                    border = BorderStroke(1.dp, SpoolStudioColors.GoldDark),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = SpoolStudioColors.GoldSoft.copy(alpha = 0.25f),
+                        contentColor = SpoolStudioColors.GoldDark
+                    )
+                ) { Text("Use color name: ${suggestColorName(form.colorHex)}") }
+            }
 
             CompactTextRow(
                 label = "HEX",

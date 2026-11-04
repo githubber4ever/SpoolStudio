@@ -12,6 +12,20 @@ import org.junit.Test
 
 class SpoolFormHelpersTest {
     @Test
+    fun colorSuggestionIsHiddenWhenCurrentNameAlreadyMatches() {
+        assertFalse(shouldOfferColorNameSuggestion("Green", "47D501"))
+        assertFalse(shouldOfferColorNameSuggestion("  green  ", "47D501"))
+        assertFalse(shouldOfferColorNameSuggestion("Black", "000000"))
+    }
+
+    @Test
+    fun colorSuggestionRequiresAColorAndAnExplicitlyDifferentName() {
+        assertFalse(shouldOfferColorNameSuggestion("My filament", null))
+        assertFalse(shouldOfferColorNameSuggestion("My filament", ""))
+        assertTrue(shouldOfferColorNameSuggestion("My product name", "47D501"))
+    }
+
+    @Test
     fun resolveNamesUseCustomValuesOnlyForOtherSelection() {
         assertEquals("PLA", resolveMaterialName("PLA", "PETG-CF"))
         assertEquals("PETG-CF", resolveMaterialName("Other", "PETG-CF"))

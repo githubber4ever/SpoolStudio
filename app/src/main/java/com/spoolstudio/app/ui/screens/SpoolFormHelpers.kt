@@ -5,11 +5,19 @@ import com.spoolstudio.app.domain.models.OpenSpoolData
 import com.spoolstudio.app.domain.models.normalizeCardUid
 import com.spoolstudio.app.domain.models.spoolLinkSpoolmanFields
 import com.spoolstudio.app.domain.models.spoolLinkTagFields
+import com.spoolstudio.app.utils.suggestColorName
 import com.spoolstudio.app.ui.SpoolMode
 import com.spoolstudio.app.ui.SpoolmanSaveRequest
 import com.spoolstudio.app.ui.normalizedColorHex
 import com.spoolstudio.app.ui.parseRemainingWeight
 import java.util.Locale
+
+fun shouldOfferColorNameSuggestion(filamentName: String, colorHex: String?): Boolean {
+    if (colorHex.isNullOrBlank()) return false
+    val suggestion = suggestColorName(colorHex)
+    fun normalized(value: String) = value.trim().replace(Regex("\\s+"), " ")
+    return suggestion.isNotBlank() && !normalized(filamentName).equals(normalized(suggestion), ignoreCase = true)
+}
 
 fun resolveMaterialName(filamentType: String, customMaterial: String): String =
     if (filamentType == "Other" && customMaterial.isNotBlank()) customMaterial else filamentType
